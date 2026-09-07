@@ -1,10 +1,18 @@
 <script setup>
 import { computed, onMounted, onUnmounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useBackendStore } from '@/stores/backend'
+import { useAuthStore } from '@/stores/auth'
 
 const route = useRoute()
+const router = useRouter()
 const backendStore = useBackendStore()
+const authStore = useAuthStore()
+
+async function handleLogout() {
+  await authStore.logout()
+  router.push('/login')
+}
 
 const menuItems = [
   { path: '/dashboard', title: '学习总览', icon: 'DataBoard' },
@@ -28,7 +36,13 @@ const statusInfo = computed(() => {
     : { type: 'danger', text: '后端离线' }
 })
 
-onMounted(() => backendStore.startPolling())
+onMounted(() => {
+  backendStore.startPolling()
+  // 刷新后从本地恢复用户信息(不阻塞页面渲染)
+  if (authStore.token && !authStore.user) {
+    authStore.fetchMe().catch(() => {})
+  }
+})
 onUnmounted(() => backendStore.stopPolling())
 </script>
 
@@ -50,15 +64,30 @@ onUnmounted(() => backendStore.stopPolling())
     <el-container class="right">
       <el-header class="header">
         <div class="page-title">{{ route.meta.title || '' }}</div>
-        <el-tag
-          :type="statusInfo.type"
-          effect="light"
-          class="status-tag"
-          title="点击重新检测后端连接"
-          @click="backendStore.checkHealth()"
-        >
-          {{ statusInfo.text }}
-        </el-tag>
+        <div class="header-right">
+          <el-tag
+            :type="statusInfo.type"
+            effect="light"
+            class="status-tag"
+            title="点击重新检测后端连接"
+            @click="backendStore.checkHealth()"
+          >
+            {{ statusInfo.text }}
+          </el-tag>
+          <el-dropdown v-if="authStore.user" @command="handleLogout">
+            <span class="user-entry">
+              <el-icon><UserFilled /></el-icon>
+              <span class="user-email">{{ authStore.user.email }}</span>
+            </span>
+            <template #dropdown>
+              <el-dropdown-menu>
+                <el-dropdown-item command="logout">
+                  <el-icon><SwitchButton /></el-icon>退出登录
+                </el-dropdown-item>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </div>
       </el-header>
       <el-main class="main">
         <RouterView />
@@ -109,6 +138,26 @@ onUnmounted(() => backendStore.stopPolling())
 }
 .status-tag {
   cursor: pointer;
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.user-entry {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--el-text-color-primary);
+  outline: none;
+}
+.user-email {
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .main {
   overflow-y: auto;

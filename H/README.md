@@ -38,6 +38,22 @@ LLM 密钥不写入 `.env` 文件(避免随项目复制/打包泄露),通过**�
 密钥从 [platform.deepseek.com](https://platform.deepseek.com) 申请。
 未设置密钥时服务仍可启动:健康检查、作文题库等非 LLM 接口可用,生成类接口返回 502。
 
+**Resend 邮件密钥**(密码重置邮件用,可选):同样走系统环境变量 `RESEND_API_KEY`
+(平台 [resend.com](https://resend.com))。未配置时注册/登录不受影响,仅重置密码接口返回 503;
+域名验证与腾讯云 DNS 配置见 [`docs/resend-tencent-dns.md`](../docs/resend-tencent-dns.md)。
+
+### 认证(邮箱 + 密码)
+
+所有业务接口需 `Authorization: Bearer <token>`(登录/注册后获取,契约 3.7);
+`/api/health` 与 `/api/auth/*` 为公开接口。数据按用户隔离:
+内置作文题库全员共享,其余(单词本/对话/自测/阅读/自定义题目)每用户独立。
+
+- 密码 bcrypt 哈希(sha256 预哈希,兼容 bcrypt 5.0 的 72 字节限制)
+- 会话 token 与重置 token 只存 SHA-256 哈希;登录失败 5 次锁定 5 分钟;重置邮件每邮箱 60s 限 1 封
+- **升级注意**:启动时自动执行多用户迁移(加 user_id 列/重建分组表/老数据打孤儿标记),
+  升级前请备份 `english_learning.db`;老数据不会归属任何账号,如需把老单词本并入某个新账号,可手动执行:
+  `UPDATE words SET user_id='<该用户的 id>' WHERE user_id IS NULL`(其他表同理)。
+
 ## 切换 LLM 提供商
 
 后端走 OpenAI 兼容协议(经 `langchain-openai`),改 `.env` 即可:
@@ -56,14 +72,17 @@ H/
 ├── app/
 │   ├── main.py            # FastAPI 装配:CORS、LLMError→502、路由注册
 │   ├── config.py          # 配置(.env 优先)
-│   ├── database.py        # SQLite 引擎 / Session / init_db
-│   ├── models.py          # ORM:会话/消息/单词/自测/阅读文章/作文题库
+│   ├── database.py        # SQLite 引擎 / Session / init_db(含多用户迁移)
+│   ├── models.py          # ORM:用户/会话/消息/单词/自测/阅读文章/作文题库
 │   ├── schemas.py         # Pydantic 契约模型(与 API.md 一一对应)
+│   ├── auth.py            # 密码哈希 / 会话与重置 token / get_current_user
+│   ├── email.py           # Resend 邮件发送(密码重置)
 │   ├── sm2.py             # SM-2 间隔重复算法
 │   ├── llm.py             # LangChain 访问层(结构化输出 + 重试)
 │   ├── prompts.py         # 各模块提示词
 │   ├── seed_topics.py     # 作文题库种子(内置,无需 LLM)
-│   └── routers/           # health / chat / vocabulary / translate / writing / reading
+│   └── routers/           # health / auth / chat / vocabulary / translate / writing / reading
+├── tests/auth_smoke.py    # 认证与多用户隔离冒烟测试(独立临时库)
 └── english_learning.db    # 运行后自动生成
 ```
 
@@ -71,8 +90,8 @@ H/
 
 - **SSE 对话**(契约第 2 节):`data: {"type":"delta"|"done"|"error"}` 帧,`\n\n` 分隔,
   每 20s 心跳 `: ping`;客户端断开时取消 LLM 任务中止生成;部分内容也落库。
-- **结构化输出**:`with_structured_output`(函数调用) + 失败重试 2 次,仍失败返回
-  `502 {"detail": "生成失败,请重试"}`;阅读题目生成后做语义校验(选项数/答案在选项中),不合规重试。
+- **结构化输出**:`bind_tools` 强制函数调用 + DeepSeek 嵌套 JSON 字符串修复 + 时间预算内重试,
+  仍失败返回 `502 {"detail": "生成失败,请重试"}`;阅读题目生成后做语义校验(选项数/答案在选项中),不合规重试。
 - **SM-2**:EF 初始 2.5、下限 1.3;quality<3 重置 repetition;间隔 1 天 → 6 天 → round(上次间隔×EF);
   `is_mastered = repetition >= 5`。前端四档按钮映射 0/2/4/5(见前端 constants)。
 - **自测约定**:按契约「打乱后正确答案是 options[0]」实现(判分依据仍记录在库,提交零 LLM 成本)。
@@ -86,5 +105,9 @@ H/
 
 ```bash
 cd H
-..\.venv\Scripts\python -c "from fastapi.testclient import TestClient; from app.main import app; c=TestClient(app); print(c.get('/api/health').json()); print(len(c.get('/api/writing/topics').json()['topics']))"
+# 认证 + 多用户隔离全流程(独立临时库 test_smoke.db,不影响开发库;44 项断言)
+..\.venv\Scripts\python tests/auth_smoke.py
+
+# 基础连通性(health 为公开接口)
+..\.venv\Scripts\python -c "from fastapi.testclient import TestClient; from app.main import app; print(TestClient(app).get('/api/health').json())"
 ```

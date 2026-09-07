@@ -211,6 +211,38 @@ class ArticleSubmitIn(BaseModel):
     answers: list[dict] = Field(default_factory=list)  # [{question_id, answer}]
 
 
+# ==================== 认证(契约 3.7) ====================
+
+class RegisterIn(BaseModel):
+    email: str
+    password: str
+
+
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class ResetRequestIn(BaseModel):
+    email: str
+
+
+class ResetConfirmIn(BaseModel):
+    token: str
+    new_password: str
+
+
+class UserOut(BaseModel):
+    id: str
+    email: str
+    created_at: str
+
+
+class TokenOut(BaseModel):
+    token: str
+    user: UserOut
+
+
 # ==================== 对外响应(契约) ====================
 
 class WordOut(BaseModel):

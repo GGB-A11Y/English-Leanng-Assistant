@@ -13,10 +13,11 @@ from fastapi.responses import StreamingResponse
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user
 from ..config import settings
 from ..database import get_db
 from ..llm import build_llm
-from ..models import ChatMessage, ChatSession
+from ..models import ChatMessage, ChatSession, User
 from ..prompts import CHAT_SYSTEM
 from ..schemas import ChatMessageIn, MessageOut, SessionDetailOut, SessionListItem, SessionOut, iso
 
@@ -50,9 +51,17 @@ def session_to_detail(s: ChatSession) -> SessionDetailOut:
     )
 
 
+def _get_owned_session_or_404(session_id: str, user: User, db: Session) -> ChatSession:
+    """会话归属校验:不存在或不属于当前用户一律 404(不泄露存在性)。"""
+    session = db.get(ChatSession, session_id)
+    if not session or session.user_id != user.id:
+        raise HTTPException(404, "会话不存在")
+    return session
+
+
 @router.post("/chat/sessions", response_model=SessionOut)
-def create_session(db: Session = Depends(get_db)):
-    session = ChatSession()
+def create_session(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    session = ChatSession(user_id=user.id)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -60,34 +69,37 @@ def create_session(db: Session = Depends(get_db)):
 
 
 @router.get("/chat/sessions", response_model=list[SessionListItem])
-def list_sessions(db: Session = Depends(get_db)):
-    sessions = db.query(ChatSession).order_by(ChatSession.created_at.desc()).all()
+def list_sessions(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    sessions = (
+        db.query(ChatSession)
+        .filter(ChatSession.user_id == user.id)
+        .order_by(ChatSession.created_at.desc())
+        .all()
+    )
     return [session_to_list_item(s) for s in sessions]
 
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionDetailOut)
-def get_session(session_id: str, db: Session = Depends(get_db)):
-    session = db.get(ChatSession, session_id)
-    if not session:
-        raise HTTPException(404, "会话不存在")
-    return session_to_detail(session)
+def get_session(session_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return session_to_detail(_get_owned_session_or_404(session_id, user, db))
 
 
 @router.delete("/chat/sessions/{session_id}")
-def delete_session(session_id: str, db: Session = Depends(get_db)):
-    session = db.get(ChatSession, session_id)
-    if not session:
-        raise HTTPException(404, "会话不存在")
+def delete_session(session_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    session = _get_owned_session_or_404(session_id, user, db)
     db.delete(session)
     db.commit()
     return {"ok": True}
 
 
 @router.post("/chat/sessions/{session_id}/messages")
-async def send_message(session_id: str, payload: ChatMessageIn, db: Session = Depends(get_db)):
-    session = db.get(ChatSession, session_id)
-    if not session:
-        raise HTTPException(404, "会话不存在")
+async def send_message(
+    session_id: str,
+    payload: ChatMessageIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session = _get_owned_session_or_404(session_id, user, db)
     content = payload.content.strip()
     if not content:
         raise HTTPException(422, "消息内容不能为空")

@@ -12,9 +12,10 @@ import time
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user
 from ..database import get_db
 from ..llm import generate_structured
-from ..models import ReadingArticle
+from ..models import ReadingArticle, User
 from ..prompts import ARTICLE_SYSTEM
 from ..schemas import (
     ArticleGenerateIn, ArticleLlm, ArticleOut, ArticleSubmitIn, ArticleSubmitOut,
@@ -67,7 +68,11 @@ def _normalize_question(q) -> dict | None:
 
 
 @router.post("/reading/articles/generate", response_model=ArticleOut)
-def generate_article(payload: ArticleGenerateIn, db: Session = Depends(get_db)):
+def generate_article(
+    payload: ArticleGenerateIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if len(payload.topic) > 100:
         raise HTTPException(422, "主题过长(最多 100 字符)")
     stage, level = _resolve_stage_level(payload)
@@ -95,6 +100,7 @@ def generate_article(payload: ArticleGenerateIn, db: Session = Depends(get_db)):
         for i, q in enumerate(result.questions, start=1)
     ]
     article = ReadingArticle(
+        user_id=user.id,
         title=result.title,
         level=level,
         stage=stage,
@@ -122,9 +128,14 @@ def generate_article(payload: ArticleGenerateIn, db: Session = Depends(get_db)):
 
 
 @router.post("/reading/articles/{article_id}/submit", response_model=ArticleSubmitOut)
-def submit_article(article_id: str, payload: ArticleSubmitIn, db: Session = Depends(get_db)):
+def submit_article(
+    article_id: str,
+    payload: ArticleSubmitIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     article = db.get(ReadingArticle, article_id)
-    if not article:
+    if not article or article.user_id != user.id:
         raise HTTPException(404, "文章不存在")
 
     answer_map = {str(a.get("question_id")): a.get("answer") for a in payload.answers}

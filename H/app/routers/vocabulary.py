@@ -3,12 +3,14 @@ import random
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user
 from ..builtin import STAGES, get_stage, load_stage
 from ..database import get_db
 from ..llm import generate_structured
-from ..models import Quiz, Word, WordGroup
+from ..models import Quiz, User, Word, WordGroup
 from ..prompts import WORD_ENTRY_SYSTEM
 from ..schemas import (
     GroupCreateIn, QuizQuestionOut, QuizStartOut, QuizSubmitIn, QuizSubmitOut,
@@ -20,11 +22,16 @@ from ..sm2 import apply_sm2
 router = APIRouter(tags=["vocabulary"])
 
 
-def _get_word_or_404(word_id: str, db: Session) -> Word:
+def _get_word_or_404(word_id: str, user: User, db: Session) -> Word:
+    """单词归属校验:不存在或不属于当前用户一律 404(不泄露存在性)。"""
     word = db.get(Word, word_id)
-    if not word:
+    if not word or word.user_id != user.id:
         raise HTTPException(404, "单词不存在")
     return word
+
+
+def _user_words(db: Session, user: User) -> list[Word]:
+    return db.query(Word).filter(Word.user_id == user.id).all()
 
 
 def _generate_entry(word: str) -> WordEntryLlm:
@@ -45,10 +52,10 @@ def _fill_ai_fields(w: Word, entry: WordEntryLlm) -> None:
 
 
 @router.get("/vocabulary/builtin")
-def list_builtin(db: Session = Depends(get_db)):
-    """内置词库学段列表(含已导入数量,用于导入/删除管理)。"""
+def list_builtin(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """内置词库学段列表(含当前用户已导入数量,用于导入/删除管理)。"""
     tag_counts: dict = {}
-    for w in db.query(Word).all():
+    for w in _user_words(db, user):
         for t in w.tags or []:
             tag_counts[t] = tag_counts.get(t, 0) + 1
     return {
@@ -66,12 +73,12 @@ def list_builtin(db: Session = Depends(get_db)):
 
 
 @router.delete("/vocabulary/builtin/{stage}")
-def delete_stage(stage: str, db: Session = Depends(get_db)):
-    """删除已导入的某学段词库(按学段标签批量删除该学段全部单词)。"""
+def delete_stage(stage: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """删除当前用户已导入的某学段词库(按学段标签批量删除该学段全部单词)。"""
     info = get_stage(stage)
     if not info:
         raise HTTPException(404, "词库不存在")
-    words = [w for w in db.query(Word).all() if info["label"] in (w.tags or [])]
+    words = [w for w in _user_words(db, user) if info["label"] in (w.tags or [])]
     for w in words:
         db.delete(w)
     db.commit()
@@ -79,7 +86,11 @@ def delete_stage(stage: str, db: Session = Depends(get_db)):
 
 
 @router.post("/vocabulary/words/import")
-def import_stage(payload: StageImportIn, db: Session = Depends(get_db)):
+def import_stage(
+    payload: StageImportIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """按学段批量导入内置词库(去重,词条数据来自词库本身,不调用 AI)。"""
     info = next((s for s in STAGES if s["stage"] == payload.stage), None)
     if not info:
@@ -88,7 +99,7 @@ def import_stage(payload: StageImportIn, db: Session = Depends(get_db)):
     if not entries:
         raise HTTPException(500, "词库数据缺失")
 
-    existing = {w[0].lower() for w in db.query(Word.word).all()}
+    existing = {w.word.lower() for w in _user_words(db, user)}
     new_words = []
     for e in entries:
         if e["word"].lower() in existing:
@@ -96,6 +107,7 @@ def import_stage(payload: StageImportIn, db: Session = Depends(get_db)):
         existing.add(e["word"].lower())
         new_words.append(
             Word(
+                user_id=user.id,
                 word=e["word"],
                 phonetic=e.get("phonetic") or "",
                 pos=e.get("pos") or "",
@@ -126,9 +138,10 @@ def list_words(
     q: str | None = None,
     group: str | None = None,
     status: str | None = None,  # learned=复习过至少一次 | unlearned=从未复习
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    query = db.query(Word)
+    query = db.query(Word).filter(Word.user_id == user.id)
     if q and q.strip():
         query = query.filter(Word.word.contains(q.strip()))
     if status == "learned":
@@ -147,37 +160,39 @@ def list_words(
 
 
 @router.get("/vocabulary/groups")
-def list_groups(db: Session = Depends(get_db)):
-    """分组列表(含每个分组下的单词数);空分组也保留(建组即持久化)。"""
+def list_groups(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """当前用户的分组列表(含每个分组下的单词数);空分组也保留(建组即持久化)。"""
     counts: dict = {}
-    for w in db.query(Word).all():
+    for w in _user_words(db, user):
         for g in w.groups or []:
             counts[g] = counts.get(g, 0) + 1
-    stored = {g.name for g in db.query(WordGroup).all()}
+    stored = {
+        g.name for g in db.query(WordGroup).filter(WordGroup.user_id == user.id).all()
+    }
     names = sorted(set(counts) | stored)
     return {"groups": [{"name": n, "count": counts.get(n, 0)} for n in names]}
 
 
 @router.post("/vocabulary/groups")
-def create_group(payload: GroupCreateIn, db: Session = Depends(get_db)):
+def create_group(payload: GroupCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     name = payload.name.strip()
     if not name or len(name) > 20:
         raise HTTPException(422, "分组名不能为空且不超过 20 个字符")
-    if db.query(WordGroup).filter(WordGroup.name == name).first():
+    if db.query(WordGroup).filter(WordGroup.user_id == user.id, WordGroup.name == name).first():
         raise HTTPException(409, "分组已存在")
-    db.add(WordGroup(name=name))
+    db.add(WordGroup(user_id=user.id, name=name))
     db.commit()
     return {"name": name, "count": 0}
 
 
 @router.delete("/vocabulary/groups/{name}")
-def delete_group(name: str, db: Session = Depends(get_db)):
+def delete_group(name: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """删除分组:移除分组记录,并把所有单词从该分组中摘除(不删单词本身)。
 
     兼容详情页直接输入、无分组记录的「散装分组名」。
     """
-    grp = db.query(WordGroup).filter(WordGroup.name == name).first()
-    words = [w for w in db.query(Word).all() if name in (w.groups or [])]
+    grp = db.query(WordGroup).filter(WordGroup.user_id == user.id, WordGroup.name == name).first()
+    words = [w for w in _user_words(db, user) if name in (w.groups or [])]
     if not grp and not words:
         raise HTTPException(404, "分组不存在")
     for w in words:
@@ -189,34 +204,39 @@ def delete_group(name: str, db: Session = Depends(get_db)):
 
 
 @router.post("/vocabulary/words", response_model=WordOut)
-def add_word(payload: WordCreateIn, db: Session = Depends(get_db)):
+def add_word(payload: WordCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     word = payload.word.strip()
     if not word or len(word) > 64:
         raise HTTPException(422, "单词不能为空且长度不超过 64 个字符")
-    exists = db.query(Word).filter(Word.word.ilike(word)).first()
+    exists = db.query(Word).filter(Word.user_id == user.id, Word.word.ilike(word)).first()
     if exists:
         raise HTTPException(409, "单词已存在")  # 契约:重复添加返回 409
 
     entry = _generate_entry(word)
     w = Word(
+        user_id=user.id,
         word=word,
         tags=entry.tags,  # 标签随 AI 生成;用户可后续 PATCH 修改
     )
     _fill_ai_fields(w, entry)
     db.add(w)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:  # 应用层检查之外的并发兜底:复合唯一索引 (user_id, word)
+        db.rollback()
+        raise HTTPException(409, "单词已存在")
     db.refresh(w)
     return word_to_out(w)
 
 
 @router.get("/vocabulary/words/{word_id}", response_model=WordOut)
-def get_word(word_id: str, db: Session = Depends(get_db)):
-    return word_to_out(_get_word_or_404(word_id, db))
+def get_word(word_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    return word_to_out(_get_word_or_404(word_id, user, db))
 
 
 @router.post("/vocabulary/words/{word_id}/generate", response_model=WordOut)
-def regenerate_word(word_id: str, db: Session = Depends(get_db)):
-    w = _get_word_or_404(word_id, db)
+def regenerate_word(word_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    w = _get_word_or_404(word_id, user, db)
     entry = _generate_entry(w.word)
     _fill_ai_fields(w, entry)
     # 保留学段标签(删除学段词库按标签识别,见 delete_stage):
@@ -231,8 +251,13 @@ def regenerate_word(word_id: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/vocabulary/words/{word_id}", response_model=WordOut)
-def update_word(word_id: str, payload: WordPatchIn, db: Session = Depends(get_db)):
-    w = _get_word_or_404(word_id, db)
+def update_word(
+    word_id: str,
+    payload: WordPatchIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    w = _get_word_or_404(word_id, user, db)
     if payload.tags is not None:
         w.tags = payload.tags
     if payload.groups is not None:
@@ -247,8 +272,8 @@ def update_word(word_id: str, payload: WordPatchIn, db: Session = Depends(get_db
 
 
 @router.delete("/vocabulary/words/{word_id}")
-def delete_word(word_id: str, db: Session = Depends(get_db)):
-    w = _get_word_or_404(word_id, db)
+def delete_word(word_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    w = _get_word_or_404(word_id, user, db)
     db.delete(w)
     db.commit()
     return {"ok": True}
@@ -258,12 +283,13 @@ def delete_word(word_id: str, db: Session = Depends(get_db)):
 def review_due(
     include_new: bool = True,
     limit: int = Query(20, ge=1, le=100),
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     now = datetime.now()
     due = (
         db.query(Word)
-        .filter(Word.next_review_at.is_not(None), Word.next_review_at <= now)
+        .filter(Word.user_id == user.id, Word.next_review_at.is_not(None), Word.next_review_at <= now)
         .order_by(Word.next_review_at)
         .all()
     )
@@ -271,7 +297,7 @@ def review_due(
     if include_new:  # 到期词不足时,补从未学过的词(familiarity=0)
         new_words = (
             db.query(Word)
-            .filter(Word.next_review_at.is_(None))
+            .filter(Word.user_id == user.id, Word.next_review_at.is_(None))
             .order_by(Word.created_at)
             .all()
         )
@@ -286,13 +312,18 @@ def review_due(
             for w in items
         ],
         due_count=len(due),  # 真实到期总数,不受 limit 影响
-        total_count=db.query(Word).count(),
+        total_count=db.query(Word).filter(Word.user_id == user.id).count(),
     )
 
 
 @router.post("/vocabulary/review/{word_id}", response_model=ReviewResultOut)
-def submit_review(word_id: str, payload: ReviewSubmitIn, db: Session = Depends(get_db)):
-    w = _get_word_or_404(word_id, db)
+def submit_review(
+    word_id: str,
+    payload: ReviewSubmitIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    w = _get_word_or_404(word_id, user, db)
     apply_sm2(w, payload.quality)
     db.commit()
     return ReviewResultOut(
@@ -307,8 +338,8 @@ def submit_review(word_id: str, payload: ReviewSubmitIn, db: Session = Depends(g
 
 
 @router.get("/vocabulary/quiz", response_model=QuizStartOut)
-def start_quiz(count: int = Query(10, ge=1, le=50), db: Session = Depends(get_db)):
-    words = [w for w in db.query(Word).all() if w.definition_cn]
+def start_quiz(count: int = Query(10, ge=1, le=50), user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    words = [w for w in _user_words(db, user) if w.definition_cn]
     if len(words) < 4:
         raise HTTPException(400, "单词本中的单词不足(至少需要 4 个),先添加一些单词吧")
 
@@ -339,16 +370,21 @@ def start_quiz(count: int = Query(10, ge=1, le=50), db: Session = Depends(get_db
     if not questions:
         raise HTTPException(400, "单词本中的单词不足(至少需要 4 个),先添加一些单词吧")
 
-    quiz = Quiz(questions=questions, answers=answers)
+    quiz = Quiz(user_id=user.id, questions=questions, answers=answers)
     db.add(quiz)
     db.commit()
     return QuizStartOut(quiz_id=quiz.quiz_id, questions=[QuizQuestionOut(**q) for q in questions])
 
 
 @router.post("/vocabulary/quiz/{quiz_id}/submit", response_model=QuizSubmitOut)
-def submit_quiz(quiz_id: str, payload: QuizSubmitIn, db: Session = Depends(get_db)):
+def submit_quiz(
+    quiz_id: str,
+    payload: QuizSubmitIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     quiz = db.get(Quiz, quiz_id)
-    if not quiz:
+    if not quiz or quiz.user_id != user.id:
         raise HTTPException(404, "自测不存在或已失效,请重新开始")
 
     key = {a["word"]: a["answer"] for a in quiz.answers}

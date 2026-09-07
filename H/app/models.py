@@ -6,7 +6,7 @@ id 采用带前缀的随机串,与契约示例(s_1 / w_1 / q_1)风格一致;
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .database import Base
@@ -20,10 +20,49 @@ def now() -> datetime:
     return datetime.now()
 
 
+# ==================== 认证(每用户隔离) ====================
+
+class User(Base):
+    __tablename__ = "users"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("u"))
+    email: Mapped[str] = mapped_column(String, unique=True, index=True)  # 注册时统一小写
+    password_hash: Mapped[str] = mapped_column(String)
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0)
+    locked_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class AuthSession(Base):
+    """登录会话:token 只存 SHA-256 哈希,泄露库文件也拿不到明文 token。"""
+
+    __tablename__ = "auth_sessions"
+
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+class PasswordResetToken(Base):
+    """密码重置一次性 token(哈希存储,用后即删)。"""
+
+    __tablename__ = "password_reset_tokens"
+
+    token_hash: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
+# ==================== 业务数据(带 user_id,每用户隔离) ====================
+
 class ChatSession(Base):
     __tablename__ = "chat_sessions"
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("s"))
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
     title: Mapped[str] = mapped_column(String, default="新对话")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     messages: Mapped[list["ChatMessage"]] = relationship(
@@ -44,9 +83,11 @@ class ChatMessage(Base):
 
 class Word(Base):
     __tablename__ = "words"
+    __table_args__ = (UniqueConstraint("user_id", "word", name="uq_words_user_word"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("w"))
-    word: Mapped[str] = mapped_column(String, unique=True, index=True)
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
+    word: Mapped[str] = mapped_column(String, index=True)
     phonetic: Mapped[str] = mapped_column(String, default="")
     pos: Mapped[str] = mapped_column(String, default="")
     definition_cn: Mapped[str] = mapped_column(String, default="")
@@ -73,9 +114,11 @@ class WordGroup(Base):
     """用户自定义分组(单词与分组的归属存在 Word.groups 上)。"""
 
     __tablename__ = "word_groups"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_word_groups_user_name"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("g"))
-    name: Mapped[str] = mapped_column(String, unique=True)
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
+    name: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -83,6 +126,7 @@ class Quiz(Base):
     __tablename__ = "quizzes"
 
     quiz_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("q"))
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
     questions: Mapped[list] = mapped_column(JSON, default=list)  # [{word, phonetic, options}]
     answers: Mapped[list] = mapped_column(JSON, default=list)    # [{word, answer}]
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
@@ -92,6 +136,7 @@ class ReadingArticle(Base):
     __tablename__ = "reading_articles"
 
     article_id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("a"))
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
     title: Mapped[str] = mapped_column(String, default="")
     level: Mapped[str] = mapped_column(String, default="")   # CEFR 等级(内部生成用)
     stage: Mapped[str] = mapped_column(String, default="")   # 学段:primary/junior/senior
@@ -108,6 +153,7 @@ class WritingTopic(Base):
     __tablename__ = "writing_topics"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=内置共享题库;'legacy'=老自建题(孤儿哨兵)
     title: Mapped[str] = mapped_column(String)
     level: Mapped[str] = mapped_column(String)
     stage: Mapped[str] = mapped_column(String, default="")  # 学段:primary/junior/senior
@@ -120,7 +166,9 @@ class TopicGroup(Base):
     """作文题目的用户自定义分组(归属存在 WritingTopic.groups 上)。"""
 
     __tablename__ = "topic_groups"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_topic_groups_user_name"),)
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("tg"))
-    name: Mapped[str] = mapped_column(String, unique=True)
+    user_id: Mapped[str | None] = mapped_column(String, index=True, nullable=True)  # NULL=老数据(孤儿)
+    name: Mapped[str] = mapped_column(String)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

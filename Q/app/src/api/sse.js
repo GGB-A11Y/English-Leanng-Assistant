@@ -16,16 +16,31 @@
  * @param {AbortSignal} [handlers.signal]      用于"停止生成"的中止信号
  * @throws {Error} 网络失败(TypeError: Failed to fetch)、HTTP 非 2xx、error 帧、流意外中断
  */
+import { getToken, clearAuth } from '@/utils/token'
+
 export async function streamSSE(url, body, { onDelta, onDone, signal } = {}) {
+  const headers = {
+    'Content-Type': 'application/json',
+    Accept: 'text/event-stream',
+  }
+  // 裸 fetch 不走 axios,鉴权头自行附加(契约 3.7)
+  const token = getToken()
+  if (token) headers.Authorization = `Bearer ${token}`
+
   const res = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'text/event-stream',
-    },
+    headers,
     body: JSON.stringify(body),
     signal,
   })
+
+  if (res.status === 401) {
+    // 登录态失效:清理并整页跳登录(与 request.js 同策略)
+    clearAuth()
+    const redirect = encodeURIComponent(window.location.pathname + window.location.search)
+    window.location.assign(`/login?redirect=${redirect}`)
+    throw new Error('登录已过期,请重新登录')
+  }
 
   if (!res.ok || !res.headers.get('content-type')?.includes('text/event-stream')) {
     const data = await res.json().catch(() => ({}))

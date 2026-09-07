@@ -2,9 +2,10 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from ..auth import get_current_user
 from ..database import get_db
 from ..llm import generate_structured, generate_text
-from ..models import TopicGroup, WritingTopic, gen_id
+from ..models import TopicGroup, User, WritingTopic, gen_id
 from ..prompts import ESSAY_GRADE_SYSTEM, ESSAY_SAMPLE_SYSTEM, TOPIC_PARSE_SYSTEM
 from ..schemas import (
     EssayGradeIn, EssayGradeLlm, EssaySampleIn, GroupCreateIn, SampleOut,
@@ -38,15 +39,36 @@ def _topic_sort_key(t: WritingTopic):
     return (1, t.id)
 
 
+def _get_owned_topic_or_404(topic_id: str, user: User, db: Session) -> WritingTopic:
+    """自有题目:内置题(user_id 为 NULL)返回 403,不存在或属于他人返回 404。"""
+    t = db.get(WritingTopic, topic_id)
+    if not t or (t.user_id is not None and t.user_id != user.id):
+        raise HTTPException(404, "题目不存在")
+    if t.user_id is None:
+        raise HTTPException(403, "内置题目不可修改或删除")
+    return t
+
+
+def _get_visible_topic_or_404(topic_id: str, user: User, db: Session) -> WritingTopic:
+    """批改/范文可见性:内置共享题或自己的题目;他人的题目返回 404。"""
+    t = db.get(WritingTopic, topic_id)
+    if not t or (t.user_id is not None and t.user_id != user.id):
+        raise HTTPException(404, "题目不存在")
+    return t
+
+
 @router.get("/writing/topics", response_model=TopicsOut)
 def list_topics(
     stage: str | None = None,
     level: str | None = None,
     group: str | None = None,
+    user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    """题目列表:按学段(stage)/CEFR(level)/自定义分组(group)筛选,皆可省略返回全部。"""
-    query = db.query(WritingTopic)
+    """题目列表:内置共享题(user_id IS NULL)+ 当前用户自建题;可按学段/CEFR/分组筛选。"""
+    query = db.query(WritingTopic).filter(
+        (WritingTopic.user_id.is_(None)) | (WritingTopic.user_id == user.id)
+    )
     if stage:
         query = query.filter(WritingTopic.stage == stage)
     if level:
@@ -58,34 +80,39 @@ def list_topics(
 
 
 @router.get("/writing/groups")
-def list_groups(db: Session = Depends(get_db)):
-    """作文题目分组列表(含每组的题目数);空分组也保留。"""
+def list_groups(user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """当前用户的作文题目分组列表(含每组的题目数);空分组也保留。"""
     counts: dict = {}
-    for t in db.query(WritingTopic).all():
+    for t in db.query(WritingTopic).filter(WritingTopic.user_id == user.id).all():
         for g in t.groups or []:
             counts[g] = counts.get(g, 0) + 1
-    stored = {g.name for g in db.query(TopicGroup).all()}
+    stored = {
+        g.name for g in db.query(TopicGroup).filter(TopicGroup.user_id == user.id).all()
+    }
     names = sorted(set(counts) | stored)
     return {"groups": [{"name": n, "count": counts.get(n, 0)} for n in names]}
 
 
 @router.post("/writing/groups")
-def create_group(payload: GroupCreateIn, db: Session = Depends(get_db)):
+def create_group(payload: GroupCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     name = payload.name.strip()
     if not name or len(name) > 20:
         raise HTTPException(422, "分组名不能为空且不超过 20 个字符")
-    if db.query(TopicGroup).filter(TopicGroup.name == name).first():
+    if db.query(TopicGroup).filter(TopicGroup.user_id == user.id, TopicGroup.name == name).first():
         raise HTTPException(409, "分组已存在")
-    db.add(TopicGroup(name=name))
+    db.add(TopicGroup(user_id=user.id, name=name))
     db.commit()
     return {"name": name, "count": 0}
 
 
 @router.delete("/writing/groups/{name}")
-def delete_group(name: str, db: Session = Depends(get_db)):
-    """删除分组:移除分组记录,并把所有题目从该分组摘除(不删题目本身)。"""
-    grp = db.query(TopicGroup).filter(TopicGroup.name == name).first()
-    topics = [t for t in db.query(WritingTopic).all() if name in (t.groups or [])]
+def delete_group(name: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """删除分组:移除分组记录,并把该用户所有题目从该分组摘除(不删题目本身)。"""
+    grp = db.query(TopicGroup).filter(TopicGroup.user_id == user.id, TopicGroup.name == name).first()
+    topics = [
+        t for t in db.query(WritingTopic).filter(WritingTopic.user_id == user.id).all()
+        if name in (t.groups or [])
+    ]
     if not grp and not topics:
         raise HTTPException(404, "分组不存在")
     for t in topics:
@@ -97,11 +124,14 @@ def delete_group(name: str, db: Session = Depends(get_db)):
 
 
 @router.patch("/writing/topics/{topic_id}", response_model=TopicOut)
-def update_topic(topic_id: str, payload: TopicPatchIn, db: Session = Depends(get_db)):
-    """更新题目自定义字段(当前支持分组)。"""
-    t = db.get(WritingTopic, topic_id)
-    if not t:
-        raise HTTPException(404, "题目不存在")
+def update_topic(
+    topic_id: str,
+    payload: TopicPatchIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """更新自有题目的自定义字段(当前支持分组);内置共享题不可修改。"""
+    t = _get_owned_topic_or_404(topic_id, user, db)
     if payload.groups is not None:
         t.groups = payload.groups
     db.commit()
@@ -109,7 +139,7 @@ def update_topic(topic_id: str, payload: TopicPatchIn, db: Session = Depends(get
 
 
 @router.post("/writing/topics", response_model=TopicOut)
-def create_topic(payload: TopicCreateIn, db: Session = Depends(get_db)):
+def create_topic(payload: TopicCreateIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     """手动添加自定义题目(学段映射代表 CEFR 等级)。"""
     title = payload.title.strip()
     if not title or not payload.prompt.strip():
@@ -118,10 +148,11 @@ def create_topic(payload: TopicCreateIn, db: Session = Depends(get_db)):
         raise HTTPException(422, "题目过长(最多 80 字符)")
     if len(payload.prompt.strip()) > 2000:
         raise HTTPException(422, "写作要求过长(最多 2000 字符)")
-    if db.query(WritingTopic).filter(WritingTopic.title == title).first():
+    if db.query(WritingTopic).filter(WritingTopic.user_id == user.id, WritingTopic.title == title).first():
         raise HTTPException(409, "题目已存在")
     t = WritingTopic(
         id=gen_id("t"),
+        user_id=user.id,
         title=title,
         level=STAGE_REPR_LEVEL.get(payload.stage, "B1"),
         stage=payload.stage,
@@ -134,7 +165,7 @@ def create_topic(payload: TopicCreateIn, db: Session = Depends(get_db)):
 
 
 @router.post("/writing/topics/parse", response_model=TopicListLlm)
-def parse_topics(payload: TopicParseIn):
+def parse_topics(payload: TopicParseIn, user: User = Depends(get_current_user)):
     """批量导入第一步:AI 把粘贴的题目素材整理成规范题目(预览用,不入库)。"""
     if not payload.text.strip():
         raise HTTPException(422, "题目素材不能为空")
@@ -144,9 +175,11 @@ def parse_topics(payload: TopicParseIn):
 
 
 @router.post("/writing/topics/import")
-def import_topics(payload: TopicImportIn, db: Session = Depends(get_db)):
-    """批量导入第二步:把 AI 整理好的题目入库(按标题去重)。"""
-    existing = {t.title for t in db.query(WritingTopic).all()}
+def import_topics(payload: TopicImportIn, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """批量导入第二步:把 AI 整理好的题目入库(按标题去重,仅与当前用户自己的题目比较)。"""
+    existing = {
+        t.title for t in db.query(WritingTopic).filter(WritingTopic.user_id == user.id).all()
+    }
     imported = 0
     for item in payload.topics:
         title = item.title.strip()
@@ -158,6 +191,7 @@ def import_topics(payload: TopicImportIn, db: Session = Depends(get_db)):
         db.add(
             WritingTopic(
                 id=gen_id("t"),
+                user_id=user.id,
                 title=title,
                 level=item.level,
                 stage=LEVEL_TO_STAGE.get(item.level, ""),
@@ -171,17 +205,19 @@ def import_topics(payload: TopicImportIn, db: Session = Depends(get_db)):
 
 
 @router.delete("/writing/topics/{topic_id}")
-def delete_topic(topic_id: str, db: Session = Depends(get_db)):
-    t = db.get(WritingTopic, topic_id)
-    if not t:
-        raise HTTPException(404, "题目不存在")
+def delete_topic(topic_id: str, user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    t = _get_owned_topic_or_404(topic_id, user, db)
     db.delete(t)
     db.commit()
     return {"ok": True}
 
 
 @router.post("/writing/essays/grade", response_model=EssayGradeLlm)
-def grade_essay(payload: EssayGradeIn, db: Session = Depends(get_db)):
+def grade_essay(
+    payload: EssayGradeIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     if not payload.content.strip():
         raise HTTPException(422, "作文内容不能为空")
     if len(payload.content) > 8000:
@@ -193,9 +229,7 @@ def grade_essay(payload: EssayGradeIn, db: Session = Depends(get_db)):
 
     topic = None
     if payload.topic_id:
-        topic = db.get(WritingTopic, payload.topic_id)
-        if not topic:
-            raise HTTPException(404, "题目不存在")
+        topic = _get_visible_topic_or_404(payload.topic_id, user, db)
 
     parts = []
     if topic:
@@ -215,10 +249,12 @@ def grade_essay(payload: EssayGradeIn, db: Session = Depends(get_db)):
 
 
 @router.post("/writing/essays/sample", response_model=SampleOut)
-def generate_sample(payload: EssaySampleIn, db: Session = Depends(get_db)):
-    topic = db.get(WritingTopic, payload.topic_id)
-    if not topic:
-        raise HTTPException(404, "题目不存在")
+def generate_sample(
+    payload: EssaySampleIn,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    topic = _get_visible_topic_or_404(payload.topic_id, user, db)
     keywords = f"\n建议覆盖的关键词:{', '.join(topic.keywords)}" if topic.keywords else ""
     user = f"题目:{topic.title}(CEFR {topic.level})\n要求:{topic.prompt}{keywords}"
     return SampleOut(essay=generate_text(ESSAY_SAMPLE_SYSTEM, user))

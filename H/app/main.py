@@ -15,7 +15,7 @@ from .config import settings
 from .database import SessionLocal, init_db
 from .llm import LLMError
 from .models import Quiz, ReadingArticle
-from .routers import chat, health, reading, translate, vocabulary, writing
+from .routers import auth, chat, health, reading, translate, vocabulary, writing
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -69,5 +69,5 @@ async def llm_error_handler(request: Request, exc: LLMError):
     return JSONResponse(status_code=502, content={"detail": str(exc)})
 
 
-for module in (health, chat, vocabulary, translate, writing, reading):
+for module in (health, auth, chat, vocabulary, translate, writing, reading):
     app.include_router(module.router, prefix="/api")

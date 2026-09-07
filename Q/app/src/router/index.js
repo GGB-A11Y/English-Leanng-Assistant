@@ -1,8 +1,22 @@
 import { createRouter, createWebHistory } from 'vue-router'
+import { getToken } from '@/utils/token'
 
 const router = createRouter({
   history: createWebHistory(import.meta.env.BASE_URL),
   routes: [
+    // 认证页:独立于 AppLayout 的顶层路由(meta.public = 无需登录)
+    {
+      path: '/login',
+      name: 'login',
+      component: () => import('@/views/auth/LoginView.vue'),
+      meta: { title: '登录', public: true },
+    },
+    {
+      path: '/reset-password',
+      name: 'reset-password',
+      component: () => import('@/views/auth/ResetPasswordView.vue'),
+      meta: { title: '重置密码', public: true },
+    },
     {
       path: '/',
       component: () => import('@/layouts/AppLayout.vue'),
@@ -67,6 +81,18 @@ const router = createRouter({
     },
     { path: '/:pathMatch(.*)*', redirect: '/dashboard' },
   ],
+})
+
+// 全局登录守卫:未登录访问受保护页面 → 登录页(带 redirect 回跳);
+// 已登录访问登录页 → 首页(重置密码页允许登录态访问,方便改密后继续)
+router.beforeEach((to) => {
+  const authed = Boolean(getToken())
+  if (!to.meta.public && !authed) {
+    return { path: '/login', query: { redirect: to.fullPath } }
+  }
+  if (to.name === 'login' && authed) {
+    return '/dashboard'
+  }
 })
 
 export default router

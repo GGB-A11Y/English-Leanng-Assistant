@@ -35,6 +35,18 @@ class Settings(BaseSettings):
     # 逗号分隔的允许来源;本地单机开发默认全开,前端独立部署时建议收紧(如 http://localhost:5173)
     cors_origins: str = "*"
 
+    # ---- 认证与邮件(Resend) ----
+    # 密钥走环境变量 RESEND_API_KEY(与 LLM 密钥同一约定,不落 .env 文件);
+    # 未配置时注册/登录仍可用,仅密码重置邮件不可用
+    resend_api_key: str = ""
+    resend_from: str = "onboarding@resend.dev"     # 测试模式默认发信地址;生产改为域名验证后的地址
+    frontend_url: str = "http://localhost:5173"    # 密码重置邮件中的链接前缀
+    session_expire_days: int = 30                  # 登录会话有效期
+    reset_token_expire_minutes: int = 15           # 重置 token 有效期
+    login_lock_threshold: int = 5                  # 连续登录失败多少次后锁定
+    login_lock_minutes: int = 5                    # 锁定时长
+    reset_email_interval_seconds: int = 60         # 重置邮件发送间隔(防轰炸)
+
     # ---- 对话 ----
     chat_history_turns: int = 8     # 送入 LLM 的最近对话轮数
 
