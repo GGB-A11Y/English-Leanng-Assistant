@@ -56,7 +56,7 @@ async function toggleTranslation() {
     translationText.value = data.translation
     showTranslation.value = true
   } catch {
-    // 错误已由 request.js 统一提示
+    // 错误已由 request.js 统一提示,这里不再重复提示
   } finally {
     translating.value = false
   }
