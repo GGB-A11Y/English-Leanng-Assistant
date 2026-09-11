@@ -14,7 +14,7 @@ const backendStore = useBackendStore()
   >
     <template #default>
       <el-button size="small" type="primary" plain :loading="backendStore.online === null" @click="backendStore.checkHealth()">
-        重新检测
+        TMD
       </el-button>
     </template>
   </el-alert>
