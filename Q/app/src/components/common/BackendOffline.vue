@@ -6,7 +6,7 @@ const backendStore = useBackendStore()
 
 <template>
   <el-alert
-    title="无法连接后端服务"
+    title="无法连接后端服务TMD"
     description="后端(LangChain 服务)似乎未启动,AI 功能暂时不可用。请确认后端已启动(默认端口 8000)后重试。"
     type="warning"
     show-icon
