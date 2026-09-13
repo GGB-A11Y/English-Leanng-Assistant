@@ -1,16 +1,28 @@
 <script setup>
-import { ref, watch, onMounted } from 'vue'
+import { ref, watch, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { useVocabularyStore } from '@/stores/vocabulary'
 import { useBackendStore } from '@/stores/backend'
 import { vocabularyApi } from '@/api/vocabulary'
 import BackendOffline from '@/components/common/BackendOffline.vue'
+import { useIsXs } from '@/composables/useMediaQuery'
 import { formatDateTime } from '@/utils/format'
 
 const router = useRouter()
 const store = useVocabularyStore()
 const backendStore = useBackendStore()
+
+// 窄屏(<768px)单词列表由表格切换为卡片
+const isXs = useIsXs()
+
+// 列表空态文案(表格与卡片两套模板共用)
+const emptyDesc = computed(() => {
+  if (store.query) return '没有找到匹配的单词'
+  if (store.status === 'unlearned') return '太棒了,没有未学习的单词'
+  if (store.status === 'learned') return '还没有已学习的单词,去「开始背诵」完成第一次复习吧'
+  return '单词本还是空的,添加你的第一个单词吧'
+})
 
 const searchInput = ref('')
 const addDialogVisible = ref(false)
@@ -241,7 +253,39 @@ function goDetail(row) {
       </el-button>
     </div>
 
-    <el-table v-loading="store.loading" :data="store.words" style="width: 100%">
+    <!-- 窄屏(<768px):卡片列表;宽屏:表格。
+         表格带 fixed="right" 操作列会渲染双份 DOM,无法用 CSS 隐藏切换,故用 v-if 双模板 -->
+    <div v-if="isXs" v-loading="store.loading" class="word-cards">
+      <el-card v-for="row in store.words" :key="row.id" class="word-card-item" shadow="hover">
+        <div class="wc-head">
+          <el-tag
+            :type="row.next_review_at ? 'success' : 'info'"
+            size="small"
+            effect="light"
+          >
+            {{ row.next_review_at ? '已学习' : '未学习' }}
+          </el-tag>
+          <el-link type="primary" class="wc-word" @click="goDetail(row)">{{ row.word }}</el-link>
+          <span v-if="row.phonetic" class="wc-phonetic">/{{ row.phonetic }}/</span>
+        </div>
+        <div class="wc-def">{{ row.definition_cn || '—' }}</div>
+        <div class="wc-meta">
+          <el-rate :model-value="row.familiarity ?? 0" disabled size="small" />
+          <span class="wc-review">下次复习 {{ formatDateTime(row.next_review_at) }}</span>
+        </div>
+        <div class="wc-actions">
+          <el-button link type="primary" size="small" @click="goDetail(row)">详情</el-button>
+          <el-popconfirm title="确定删除该单词?" @confirm="handleDelete(row)">
+            <template #reference>
+              <el-button link type="danger" size="small">删除</el-button>
+            </template>
+          </el-popconfirm>
+        </div>
+      </el-card>
+      <el-empty v-if="!store.words.length" :description="emptyDesc" :image-size="90" />
+    </div>
+
+    <el-table v-else v-loading="store.loading" :data="store.words" style="width: 100%">
       <el-table-column label="单词" min-width="210">
         <template #default="{ row }">
           <el-tag
@@ -276,18 +320,7 @@ function goDetail(row) {
         </template>
       </el-table-column>
       <template #empty>
-        <el-empty
-          :description="
-            store.query
-              ? '没有找到匹配的单词'
-              : store.status === 'unlearned'
-                ? '太棒了,没有未学习的单词'
-                : store.status === 'learned'
-                  ? '还没有已学习的单词,去「开始背诵」完成第一次复习吧'
-                  : '单词本还是空的,添加你的第一个单词吧'
-          "
-          :image-size="90"
-        />
+        <el-empty :description="emptyDesc" :image-size="90" />
       </template>
     </el-table>
 
@@ -489,5 +522,71 @@ function goDetail(row) {
   display: flex;
   justify-content: flex-end;
   margin-top: 16px;
+}
+
+/* ---- 窄屏单词卡片列表 ---- */
+.word-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.word-card-item :deep(.el-card__body) {
+  padding: 12px 14px;
+}
+.wc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wc-word {
+  font-size: 18px;
+  font-weight: 600;
+}
+.wc-phonetic {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.wc-def {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+.wc-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+}
+.wc-review {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+.wc-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+/* ---- 窄屏工具栏:搜索满行、筛选各占约半行 ---- */
+@media (max-width: 767px) {
+  .toolbar {
+    gap: 8px;
+  }
+  .search-input {
+    flex: 1 1 100%;
+    width: auto;
+  }
+  .group-select {
+    flex: 1 1 40%;
+    width: auto;
+  }
+  .status-select {
+    flex: 1 1 30%;
+    width: auto;
+  }
+  .pagination {
+    justify-content: center;
+  }
 }
 </style>

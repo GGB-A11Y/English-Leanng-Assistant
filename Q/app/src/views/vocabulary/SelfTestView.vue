@@ -5,10 +5,14 @@ import { useVocabularyStore } from '@/stores/vocabulary'
 import { useBackendStore } from '@/stores/backend'
 import { vocabularyApi } from '@/api/vocabulary'
 import BackendOffline from '@/components/common/BackendOffline.vue'
+import { useIsXs } from '@/composables/useMediaQuery'
 import { scoreColor } from '@/utils/format'
 
 const store = useVocabularyStore()
 const backendStore = useBackendStore()
+
+// 窄屏:错题表卡片化
+const isXs = useIsXs()
 
 const step = ref('setup') // setup | answering | result
 const count = ref(10)
@@ -175,7 +179,26 @@ function reset() {
 
         <template v-if="wrongResults.length">
           <h3 class="wrong-title">错题回顾</h3>
-          <el-table :data="wrongResults" size="small">
+          <!-- 窄屏卡片化(4 列表格手机上放不下) -->
+          <div v-if="isXs" class="wrong-cards">
+            <div v-for="r in wrongResults" :key="r.word" class="wrong-card">
+              <div class="wrc-head">
+                <b class="wrc-word">{{ r.word }}</b>
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="addingWords.has(r.word)"
+                  @click="markHard(r.word)"
+                >
+                  标记易错
+                </el-button>
+              </div>
+              <div class="wrc-line">你的答案:<span class="wrong-answer">{{ r.your_answer }}</span></div>
+              <div class="wrc-line">正确答案:<span class="right-answer">{{ r.correct_answer }}</span></div>
+            </div>
+          </div>
+          <el-table v-else :data="wrongResults" size="small">
             <el-table-column prop="word" label="单词" width="150" />
             <el-table-column prop="your_answer" label="你的答案" width="160">
               <template #default="{ row }">
@@ -301,5 +324,47 @@ function reset() {
 .result-actions {
   margin-top: 20px;
   text-align: center;
+}
+
+/* ---- 窄屏错题卡片 ---- */
+.wrong-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.wrong-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 14px;
+}
+.wrc-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.wrc-word {
+  font-size: 16px;
+}
+.wrc-line {
+  margin-top: 6px;
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+
+/* 窄屏:选项/操作按钮换行与间距微调 */
+@media (max-width: 767px) {
+  .q-options {
+    gap: 8px;
+  }
+  .q-actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .result-head {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
 }
 </style>

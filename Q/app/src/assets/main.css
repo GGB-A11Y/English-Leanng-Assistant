@@ -94,3 +94,36 @@ body {
 .markdown-body th {
   background: var(--el-fill-color-light, #f4f4f5);
 }
+
+/* ==================== 响应式适配(全站) ====================
+ * 断点体系(与 src/composables/useMediaQuery.js 中的 JS 常量人工同步):
+ *   xs <768px / sm 768~991px / md 992~1199px / lg 1200~1599px / xl ≥1600px
+ * @media 不能引用 CSS 变量,断点值一律写死字面量。
+ */
+
+/* 防意外整页横向滚动(表格内部滚动容器、pre 代码块不受影响) */
+body {
+  overflow-x: hidden;
+}
+
+/* 窄屏下弹窗宽度兜底:el-dialog 的 width 是内联样式且 teleport 到 body,
+ * scoped 样式够不到,只能全局 max-width 约束;ElMessageBox 是另一套 class */
+@media (max-width: 767px) {
+  .el-dialog {
+    max-width: calc(100vw - 32px);
+  }
+  .el-message-box {
+    max-width: calc(100vw - 32px);
+  }
+}
+
+/* 超宽屏(≥1600px):内容限宽居中,避免卡片/表格被拉伸过宽。
+ * 注意限宽加在 el-main 的直系子元素上(不加在 el-main 本身),
+ * 以免滚动容器与背景被缩窄;dialog/drawer 等 teleport 到 body,不受影响 */
+@media (min-width: 1600px) {
+  .el-main.main > * {
+    max-width: 1440px;
+    margin-left: auto;
+    margin-right: auto;
+  }
+}

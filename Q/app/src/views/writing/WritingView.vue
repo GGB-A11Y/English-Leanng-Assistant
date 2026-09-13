@@ -6,11 +6,15 @@ import { useBackendStore } from '@/stores/backend'
 import BackendOffline from '@/components/common/BackendOffline.vue'
 import EssayResultPanel from '@/components/writing/EssayResultPanel.vue'
 import { writingApi } from '@/api/writing'
+import { useIsXs } from '@/composables/useMediaQuery'
 import { WRITING_STAGES } from '@/constants'
 import { formatDateTime } from '@/utils/format'
 
 const store = useWritingStore()
 const backendStore = useBackendStore()
+
+// 窄屏:steps 简化为 simple 模式、批量解析预览表卡片化
+const isXs = useIsXs()
 
 const step = ref(1) // 1 选题, 2 写作, 3 结果
 const topics = ref([])
@@ -328,7 +332,7 @@ const canSubmit = computed(() => form.content.trim().length > 0)
   <div class="writing-view">
     <BackendOffline v-if="backendStore.online === false" style="margin-bottom: 16px" />
 
-    <el-steps :active="step - 1" finish-status="success" class="steps">
+    <el-steps :active="step - 1" finish-status="success" class="steps" :simple="isXs">
       <el-step title="选择题目" />
       <el-step title="写作" />
       <el-step title="批改结果" />
@@ -341,7 +345,7 @@ const canSubmit = computed(() => form.content.trim().length > 0)
           <div class="topic-toolbar">
             <div class="toolbar-left">
               <span class="label">学段筛选</span>
-              <el-select v-model="stageFilter" placeholder="全部" clearable style="width: 180px" @change="fetchTopics">
+              <el-select v-model="stageFilter" placeholder="全部" clearable class="stage-select" @change="fetchTopics">
                 <el-option
                   v-for="s in WRITING_STAGES"
                   :key="s.value"
@@ -349,7 +353,7 @@ const canSubmit = computed(() => form.content.trim().length > 0)
                   :value="s.value"
                 />
               </el-select>
-              <el-select v-model="groupFilter" placeholder="按分组筛选" clearable style="width: 150px" @change="fetchTopics">
+              <el-select v-model="groupFilter" placeholder="按分组筛选" clearable class="group-select" @change="fetchTopics">
                 <el-option
                   v-for="g in topicGroups"
                   :key="g.name"
@@ -585,7 +589,17 @@ const canSubmit = computed(() => form.content.trim().length > 0)
                 </el-button>
               </div>
               <template v-if="parsedTopics.length">
-                <el-table :data="parsedTopics" size="small" max-height="260" class="parsed-table">
+                <!-- 窄屏卡片化(580 dialog 在小屏实际宽约 100vw-32,3 列放不下) -->
+                <div v-if="isXs" class="parsed-cards">
+                  <div v-for="(t, i) in parsedTopics" :key="i" class="parsed-item">
+                    <div class="pi-head">
+                      <b>{{ t.title }}</b>
+                      <span class="pi-stage">{{ stageLabelOf(LEVEL_TO_STAGE[t.level] || '') || t.level }}</span>
+                    </div>
+                    <div class="pi-prompt">{{ t.prompt }}</div>
+                  </div>
+                </div>
+                <el-table v-else :data="parsedTopics" size="small" max-height="260" class="parsed-table">
                   <el-table-column prop="title" label="题目" min-width="150" />
                   <el-table-column label="学段" width="70">
                     <template #default="{ row }">{{ stageLabelOf(LEVEL_TO_STAGE[row.level] || '') || row.level }}</template>
@@ -610,7 +624,7 @@ const canSubmit = computed(() => form.content.trim().length > 0)
       <el-col :xs="24" :lg="7">
         <el-card class="records-card">
           <template #header>我的作文(本地保存)</template>
-          <el-scrollbar height="600px">
+          <el-scrollbar class="records-scroll">
             <div v-for="r in store.records" :key="r.id" class="record-item" @click="loadRecord(r)">
               <div class="record-head">
                 <span class="record-title">{{ r.topicTitle || r.title || '未命名作文' }}</span>
@@ -832,5 +846,89 @@ const canSubmit = computed(() => form.content.trim().length > 0)
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-top: 4px;
+}
+
+/* ---- 响应式适配 ---- */
+
+/* 筛选 select 的宽度从内联样式改为 class(内联样式压不过 media query) */
+.stage-select {
+  width: 180px;
+}
+.group-select {
+  width: 150px;
+}
+/* 记录区高度:桌面固定 600px;矮屏收缩(el-scrollbar 的 height prop 是内联样式,改 class 控制) */
+.records-scroll {
+  height: 600px;
+  height: min(600px, 55dvh);
+  min-height: 260px;
+}
+/* 窄屏批量解析预览卡片 */
+.parsed-cards {
+  max-height: 260px;
+  overflow-y: auto;
+}
+.parsed-item {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.pi-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pi-stage {
+  font-size: 12px;
+  color: var(--el-color-primary);
+}
+.pi-prompt {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  margin-top: 4px;
+}
+
+@media (max-width: 767px) {
+  .steps {
+    max-width: none;
+  }
+  .topic-toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .toolbar-left,
+  .toolbar-right {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .stage-select,
+  .group-select {
+    flex: 1 1 40%;
+    width: auto;
+    min-width: 130px;
+  }
+  .topic-head {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .topic-tags {
+    flex-wrap: wrap;
+  }
+  /* 触屏无 hover:题目卡操作按钮常显 */
+  .topic-del {
+    opacity: 1;
+  }
+  .essay-actions {
+    flex-wrap: wrap;
+  }
+  .topic-reminder {
+    font-size: 13px;
+  }
+  .result-toolbar {
+    gap: 8px;
+  }
 }
 </style>

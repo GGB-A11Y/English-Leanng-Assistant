@@ -1,8 +1,13 @@
 <script setup>
+import { useIsXs } from '@/composables/useMediaQuery'
+
 // 单词完整词条卡片(契约字段见 docs/API.md:GET /api/vocabulary/words/{id})
 const props = defineProps({
   word: { type: Object, required: true },
 })
+
+// 窄屏:释义改单列、词根词缀表改卡片
+const isXs = useIsXs()
 
 // 用浏览器原生 speechSynthesis 免费朗读,零依赖
 function speak() {
@@ -34,7 +39,7 @@ function speak() {
       </div>
     </div>
 
-    <el-descriptions :column="2" border>
+    <el-descriptions :column="isXs ? 1 : 2" border>
       <el-descriptions-item label="中文释义">{{ word.definition_cn || '—' }}</el-descriptions-item>
       <el-descriptions-item label="英文释义">{{ word.definition_en || '—' }}</el-descriptions-item>
     </el-descriptions>
@@ -49,7 +54,19 @@ function speak() {
 
     <template v-if="word.roots_affixes?.length">
       <h3 class="section-title">词根词缀</h3>
-      <el-table :data="word.roots_affixes" size="small">
+      <!-- 窄屏卡片化(表格列宽合计约 450px,手机上放不下) -->
+      <div v-if="isXs" class="root-cards">
+        <div v-for="(r, i) in word.roots_affixes" :key="i" class="root-card">
+          <div class="rc-head">
+            <span class="rc-part">{{ r.part }}</span>
+            <span class="rc-meaning">{{ r.meaning }}</span>
+          </div>
+          <div v-if="r.words?.length" class="rc-words">
+            <el-tag v-for="w in r.words" :key="w" size="small" type="info" class="tag-item">{{ w }}</el-tag>
+          </div>
+        </div>
+      </div>
+      <el-table v-else :data="word.roots_affixes" size="small">
         <el-table-column prop="part" label="词根/词缀" width="150" />
         <el-table-column prop="meaning" label="含义" width="180" />
         <el-table-column label="例词">
@@ -151,5 +168,48 @@ function speak() {
   border-radius: 6px;
   font-size: 14px;
   color: var(--el-text-color-primary);
+}
+
+/* ---- 窄屏词根词缀卡片 ---- */
+.root-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.root-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.rc-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.rc-part {
+  font-weight: 600;
+  font-size: 15px;
+  color: var(--el-color-primary);
+}
+.rc-meaning {
+  font-size: 14px;
+  color: var(--el-text-color-regular);
+}
+.rc-words {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
+
+/* 窄屏:标题区留白收紧 */
+@media (max-width: 767px) {
+  .word {
+    font-size: 28px;
+  }
+  .head {
+    margin-bottom: 12px;
+  }
 }
 </style>

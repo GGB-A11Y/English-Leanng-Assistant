@@ -142,7 +142,7 @@ function resultOfRecord(questionId, record) {
       <div class="generate-form">
         <div class="form-row">
           <span class="label">学段</span>
-          <el-select v-model="stage" style="width: 220px">
+          <el-select v-model="stage" class="stage-select">
             <el-option
               v-for="s in READING_STAGES"
               :key="s.value"
@@ -153,7 +153,7 @@ function resultOfRecord(questionId, record) {
         </div>
         <div class="form-row">
           <span class="label">主题</span>
-          <el-input v-model="topic" placeholder="可选,如 technology / travel / health" maxlength="100" style="width: 320px" />
+          <el-input v-model="topic" placeholder="可选,如 technology / travel / health" maxlength="100" class="topic-input" />
         </div>
         <el-button
           type="primary"
@@ -552,6 +552,49 @@ function resultOfRecord(questionId, record) {
 }
 .history-score {
   font-weight: 600;
+}
+
+/* ---- 响应式适配 ---- */
+
+/* 生成表单控件宽度从内联样式改为 class(内联样式压不过 media query) */
+.stage-select {
+  width: 220px;
+}
+.topic-input {
+  width: 320px;
+}
+
+@media (max-width: 767px) {
+  .form-row {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .stage-select,
+  .topic-input {
+    width: 100%;
+  }
+  /* 选项从横排改为整行竖排(触屏更易点按) */
+  .q-option {
+    margin-right: 0;
+    display: flex;
+    width: 100%;
+    align-items: flex-start;
+  }
+  .article-toolbar {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .history-head {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .history-head-right {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .result-head {
+    flex-wrap: wrap;
+  }
 }
 .history-body {
   font-size: 14px;

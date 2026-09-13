@@ -176,7 +176,7 @@ async function copyTranslation() {
               </el-popconfirm>
             </div>
           </template>
-          <el-scrollbar height="560px">
+          <el-scrollbar class="history-scroll">
             <div
               v-for="item in store.history"
               :key="item.id"
@@ -297,5 +297,27 @@ async function copyTranslation() {
   font-size: 12px;
   color: var(--el-text-color-secondary);
   margin-top: 4px;
+}
+
+/* ---- 响应式适配 ---- */
+
+/* 历史区高度:桌面固定 560px;矮屏/手机收缩
+ * (el-scrollbar 的 height prop 是内联样式,media query 压不过,改 class 控制) */
+.history-scroll {
+  height: 560px;
+  height: min(560px, 60dvh);
+  min-height: 240px;
+}
+
+@media (max-width: 767px) {
+  .translation-text {
+    font-size: 14px;
+  }
+  .explain-title {
+    font-size: 14px;
+  }
+  .input-head {
+    gap: 10px;
+  }
 }
 </style>

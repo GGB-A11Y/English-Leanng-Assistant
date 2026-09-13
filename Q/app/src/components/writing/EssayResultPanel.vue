@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import MarkdownBlock from '@/components/common/MarkdownBlock.vue'
 import { writingApi } from '@/api/writing'
+import { useIsXs } from '@/composables/useMediaQuery'
 import { CORRECTION_TYPES } from '@/constants'
 import { scoreColor } from '@/utils/format'
 
@@ -10,6 +11,9 @@ const props = defineProps({
   result: { type: Object, required: true }, // { score, level, feedback: {...} }
   topicId: { type: String, default: '' },
 })
+
+// 窄屏:纠错/词汇建议表格卡片化
+const isXs = useIsXs()
 
 // 面板在结果页切换记录时不卸载,props 会变,须用 computed 保持响应式
 const scorePercent = computed(() => Math.round(props.result?.score ?? 0))
@@ -93,25 +97,54 @@ function correctionTypeLabel(type) {
       </el-tab-pane>
 
       <el-tab-pane label="逐句纠错">
-        <el-table v-if="feedback.corrections?.length" :data="feedback.corrections" size="small">
-          <el-table-column prop="original" label="原句" min-width="200" />
-          <el-table-column prop="corrected" label="修改建议" min-width="200" />
-          <el-table-column label="错误类型" width="110">
-            <template #default="{ row }">
-              <el-tag size="small" type="warning">{{ correctionTypeLabel(row.type) }}</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column prop="explanation" label="说明" min-width="180" />
-        </el-table>
+        <template v-if="feedback.corrections?.length">
+          <!-- 窄屏卡片化(4 列约 690px 宽,手机上放不下) -->
+          <div v-if="isXs" class="corr-cards">
+            <div v-for="(c, i) in feedback.corrections" :key="i" class="corr-card">
+              <el-tag size="small" type="warning">{{ correctionTypeLabel(c.type) }}</el-tag>
+              <div class="corr-line">
+                <span class="corr-label">原句</span>
+                <span class="corr-original">{{ c.original }}</span>
+              </div>
+              <div class="corr-line">
+                <span class="corr-label">建议</span>
+                <span>{{ c.corrected }}</span>
+              </div>
+              <div v-if="c.explanation" class="corr-line expl">{{ c.explanation }}</div>
+            </div>
+          </div>
+          <el-table v-else :data="feedback.corrections" size="small">
+            <el-table-column prop="original" label="原句" min-width="200" />
+            <el-table-column prop="corrected" label="修改建议" min-width="200" />
+            <el-table-column label="错误类型" width="110">
+              <template #default="{ row }">
+                <el-tag size="small" type="warning">{{ correctionTypeLabel(row.type) }}</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column prop="explanation" label="说明" min-width="180" />
+          </el-table>
+        </template>
         <el-empty v-else description="没有发现明显错误,写得很棒!" :image-size="60" />
       </el-tab-pane>
 
       <el-tab-pane label="词汇建议">
-        <el-table v-if="feedback.vocabulary_suggestions?.length" :data="feedback.vocabulary_suggestions" size="small">
-          <el-table-column prop="original" label="原词" width="160" />
-          <el-table-column prop="suggestion" label="建议替换" width="160" />
-          <el-table-column prop="reason" label="理由" min-width="200" />
-        </el-table>
+        <template v-if="feedback.vocabulary_suggestions?.length">
+          <div v-if="isXs" class="vocab-cards">
+            <div v-for="(v, i) in feedback.vocabulary_suggestions" :key="i" class="vocab-card">
+              <div class="vs-line">
+                <span>{{ v.original }}</span>
+                <el-icon><Right /></el-icon>
+                <b class="vs-sug">{{ v.suggestion }}</b>
+              </div>
+              <div v-if="v.reason" class="vs-reason">{{ v.reason }}</div>
+            </div>
+          </div>
+          <el-table v-else :data="feedback.vocabulary_suggestions" size="small">
+            <el-table-column prop="original" label="原词" width="160" />
+            <el-table-column prop="suggestion" label="建议替换" width="160" />
+            <el-table-column prop="reason" label="理由" min-width="200" />
+          </el-table>
+        </template>
         <el-empty v-else description="暂无词汇建议" :image-size="60" />
       </el-tab-pane>
 
@@ -171,5 +204,64 @@ function correctionTypeLabel(type) {
   padding-left: 1.4em;
   margin: 0;
   line-height: 1.8;
+}
+
+/* ---- 窄屏卡片化(纠错 / 词汇建议) ---- */
+.corr-cards,
+.vocab-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.corr-card,
+.vocab-card {
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 14px;
+}
+.corr-line {
+  display: flex;
+  gap: 8px;
+  margin-top: 6px;
+  line-height: 1.6;
+}
+.corr-label {
+  flex-shrink: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.corr-original {
+  text-decoration: line-through;
+  color: var(--el-color-danger);
+}
+.corr-line.expl {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+.vs-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.vs-sug {
+  color: var(--el-color-success);
+}
+.vs-reason {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+@media (max-width: 767px) {
+  .score-header {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .two-col {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
 }
 </style>

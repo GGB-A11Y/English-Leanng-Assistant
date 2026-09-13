@@ -95,9 +95,11 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   padding: 24px 0;
 }
 .flashcard {
-  width: 420px;
-  max-width: 100%;
-  height: 260px;
+  width: min(420px, 100%);
+  /* 用比例代替固定高度:任意宽度下等比缩放(不能同时写显式 height,
+   * height 会优先生效使 aspect-ratio 失效);min-height 保证极窄屏内容不挤压 */
+  aspect-ratio: 21 / 13;
+  min-height: 220px;
   perspective: 1200px;
   cursor: pointer;
 }
@@ -131,15 +133,15 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   transform: rotateY(180deg);
 }
 .fc-word {
-  font-size: 40px;
+  font-size: clamp(28px, 8vw, 40px); /* 随卡片宽度等比缩放 */
   font-weight: 700;
 }
 .card-face.back .fc-word {
-  font-size: 24px;
+  font-size: clamp(20px, 6vw, 24px);
 }
 .fc-phonetic {
   color: var(--el-text-color-secondary);
-  font-size: 17px;
+  font-size: clamp(14px, 4vw, 17px);
 }
 .fc-hint {
   position: absolute;
@@ -148,7 +150,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   color: var(--el-text-color-placeholder);
 }
 .fc-definition {
-  font-size: 18px;
+  font-size: clamp(15px, 4.5vw, 18px);
   color: var(--el-color-primary);
 }
 .fc-examples {
@@ -183,6 +185,25 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   gap: 12px;
   flex-wrap: wrap;
   justify-content: center;
+}
+/* 手机上评分按钮固定 2×2 排列,触屏更易点按 */
+@media (max-width: 767px) {
+  .grades-btns {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    width: 100%;
+    max-width: 420px;
+  }
+  .grades-btns .el-button {
+    margin: 0;
+  }
+  .flashcard-wrap {
+    gap: 16px;
+    padding: 12px 0;
+  }
+  .card-face {
+    padding: 16px;
+  }
 }
 .grade-hint {
   display: block;

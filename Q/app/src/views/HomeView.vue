@@ -189,4 +189,19 @@ const modules = [
   align-self: flex-end;
   padding: 0;
 }
+/* 手机:统计数字与模块描述收窄,避免换行拥挤 */
+@media (max-width: 767px) {
+  .stat-body {
+    gap: 8px;
+  }
+  .stat-value {
+    font-size: 20px;
+  }
+  .module-desc {
+    font-size: 12px;
+  }
+  .module-body {
+    min-height: 130px;
+  }
+}
 </style>

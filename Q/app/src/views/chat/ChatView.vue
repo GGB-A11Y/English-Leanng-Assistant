@@ -147,6 +147,7 @@ watch(
   display: flex;
   gap: 16px;
   height: calc(100vh - 120px);
+  height: calc(100dvh - 120px); /* 移动端地址栏收展不跳动(先 vh 回退) */
   min-height: 480px;
 }
 .session-panel {
@@ -233,5 +234,68 @@ watch(
 .offline-note {
   font-size: 13px;
   color: var(--el-color-danger);
+}
+
+/* ---- 手机(<768px):会话面板从左侧竖列改为顶部横向滑动条 ----
+ * el-scrollbar 的滚动容器是内部 .el-scrollbar__wrap,横向滚动需
+ * 内容不换行(:deep 命中 view 层);session-item 改行内胶囊。
+ * 横屏矮屏:min-height 360 兜底,超出部分由 el-main 整体滚动,
+ * 消息区不会塌成几十像素。 */
+@media (max-width: 767px) {
+  .chat-view {
+    flex-direction: column;
+    gap: 10px;
+    height: calc(100vh - 84px); /* header 60 + 主区上下留白 12×2 */
+    height: calc(100dvh - 84px);
+    min-height: 360px;
+  }
+  .session-panel {
+    width: auto;
+    flex-shrink: 0;
+    flex-direction: row;
+    align-items: center;
+    padding: 8px;
+    gap: 8px;
+  }
+  .new-btn {
+    flex-shrink: 0;
+    margin-bottom: 0;
+  }
+  .session-list {
+    flex: 1;
+    min-width: 0;
+  }
+  .session-list :deep(.el-scrollbar__view) {
+    white-space: nowrap;
+  }
+  .session-item {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    width: auto;
+    margin: 0 6px 0 0;
+    padding: 4px 14px;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 16px;
+  }
+  .session-meta {
+    display: none;
+  }
+  /* 触屏无 hover:删除按钮常显 */
+  .session-del {
+    opacity: 1;
+  }
+  .chat-panel {
+    min-height: 0;
+  }
+  .message-list {
+    padding: 12px;
+  }
+  .input-area {
+    padding: 10px 12px;
+  }
+  .input-actions {
+    flex-wrap: wrap;
+  }
 }
 </style>

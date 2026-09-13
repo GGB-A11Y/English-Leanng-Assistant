@@ -135,6 +135,12 @@ async function toggleTranslation() {
   display: flex;
   flex-direction: column;
 }
+/* 手机上 76% 仅约 260px 偏窄,放宽到 88% */
+@media (max-width: 767px) {
+  .bubble-wrap {
+    max-width: 88%;
+  }
+}
 .msg-row.user .bubble-wrap {
   align-items: flex-end;
 }
