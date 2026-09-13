@@ -79,7 +79,7 @@ def generate_article(
     topic_hint = (
         f"文章主题:{payload.topic.strip()}" if payload.topic.strip() else "主题不限,选一个适合该难度的话题"
     )
-    user = f"CEFR 难度:{level}\n{topic_hint}"
+    prompt_user = f"CEFR 难度:{level}\n{topic_hint}"
 
     # 生成 + 语义校验,不合法则重试一次;整体受时间预算约束(前端超时 120s)
     deadline = time.monotonic() + 100.0
@@ -88,7 +88,7 @@ def generate_article(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break
-        result = generate_structured(ArticleLlm, ARTICLE_SYSTEM, user, attempts=2, budget=min(60.0, remaining))
+        result = generate_structured(ArticleLlm, ARTICLE_SYSTEM, prompt_user, attempts=2, budget=min(60.0, remaining))
         if 1 <= len(result.questions) <= 10 and all(_normalize_question(q) for q in result.questions):
             break
         result = None

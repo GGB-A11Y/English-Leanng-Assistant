@@ -256,5 +256,5 @@ def generate_sample(
 ):
     topic = _get_visible_topic_or_404(payload.topic_id, user, db)
     keywords = f"\n建议覆盖的关键词:{', '.join(topic.keywords)}" if topic.keywords else ""
-    user = f"题目:{topic.title}(CEFR {topic.level})\n要求:{topic.prompt}{keywords}"
-    return SampleOut(essay=generate_text(ESSAY_SAMPLE_SYSTEM, user))
+    prompt_user = f"题目:{topic.title}(CEFR {topic.level})\n要求:{topic.prompt}{keywords}"
+    return SampleOut(essay=generate_text(ESSAY_SAMPLE_SYSTEM, prompt_user))
