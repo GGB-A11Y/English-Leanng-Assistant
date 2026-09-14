@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     login_lock_threshold: int = 5                  # 连续登录失败多少次后锁定
     login_lock_minutes: int = 5                    # 锁定时长
     reset_email_interval_seconds: int = 60         # 重置邮件发送间隔(防轰炸)
+    captcha_expire_minutes: int = 5                # 注册图形验证码有效期
 
     # ---- 对话 ----
     chat_history_turns: int = 8     # 送入 LLM 的最近对话轮数

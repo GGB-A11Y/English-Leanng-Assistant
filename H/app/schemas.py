@@ -216,6 +216,8 @@ class ArticleSubmitIn(BaseModel):
 class RegisterIn(BaseModel):
     email: str
     password: str
+    captcha_id: str = Field(min_length=1)   # 图形验证码(注册必填,一次性)
+    captcha_code: str = Field(min_length=1)
 
 
 class LoginIn(BaseModel):
@@ -236,6 +238,11 @@ class UserOut(BaseModel):
     id: str
     email: str
     created_at: str
+
+
+class CaptchaOut(BaseModel):
+    captcha_id: str
+    image: str  # SVG 验证码 data URI,直接放入 <img src>
 
 
 class TokenOut(BaseModel):

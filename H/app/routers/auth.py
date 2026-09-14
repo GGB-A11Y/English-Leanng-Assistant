@@ -3,25 +3,29 @@
 安全设计:
 - 邮箱统一小写;密码 8~128 字符(bcrypt 72 字节限制由 auth.py 的 sha256 预哈希消化)
 - 登录节流:连续失败 >= 阈值锁定账号若干分钟;用户不存在时跑一次假 bcrypt 防时序枚举
+- 注册需图形验证码(captcha.py:SVG、一次性、答案只存哈希);
+  校验顺序 邮箱/密码格式 → 验证码 → 查重,格式错误不消耗验证码
 - 重置接口:存在与否返回同一文案防枚举;每邮箱 60s 限频;改密后吊销全部会话
 """
 import logging
 import re
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from ..auth import (
     create_reset_token, create_session, get_current_user, hash_password,
     hash_token, verify_password,
 )
+from ..captcha import create_captcha, verify_captcha
 from ..config import settings
 from ..database import get_db
 from ..email import send_reset_email
 from ..models import AuthSession, PasswordResetToken, User
 from ..schemas import (
-    LoginIn, RegisterIn, ResetConfirmIn, ResetRequestIn, TokenOut, UserOut, iso,
+    CaptchaOut, LoginIn, RegisterIn, ResetConfirmIn, ResetRequestIn, TokenOut,
+    UserOut, iso,
 )
 
 router = APIRouter(tags=["auth"])
@@ -52,10 +56,22 @@ def _user_out(u: User) -> UserOut:
     return UserOut(id=u.id, email=u.email, created_at=iso(u.created_at) or "")
 
 
+@router.get("/auth/captcha", response_model=CaptchaOut)
+def get_captcha(response: Response, db: Session = Depends(get_db)):
+    """获取注册图形验证码(公开;一次性、5 分钟有效,契约 3.7)。"""
+    response.headers["Cache-Control"] = "no-store"
+    captcha_id, image = create_captcha(db)
+    return {"captcha_id": captcha_id, "image": image}
+
+
 @router.post("/auth/register", response_model=TokenOut)
 def register(payload: RegisterIn, db: Session = Depends(get_db)):
     email = _validate_email(payload.email)
     _validate_password(payload.password)
+    # 验证码校验在查重之前:先查重会把「邮箱是否已注册」变成可枚举的 oracle;
+    # 格式错误(422)在进入本函数前已返回,不消耗验证码
+    if not verify_captcha(db, payload.captcha_id, payload.captcha_code):
+        raise HTTPException(400, "验证码错误或已过期,请刷新后重试")
     if db.query(User).filter(User.email == email).first():
         raise HTTPException(409, "该邮箱已注册,请直接登录")
     user = User(email=email, password_hash=hash_password(payload.password))

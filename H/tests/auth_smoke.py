@@ -24,6 +24,12 @@ from app.main import app  # noqa: E402
 
 client = TestClient(app)
 
+# 路由层的图形验证码校验置为恒真(真实实现由第 5 节单元往返覆盖);
+# 必须 patch routers.auth 模块级名字(路由体以该名字调用),与 send_reset_email 同模式
+import app.routers.auth as auth_router  # noqa: E402
+
+auth_router.verify_captcha = lambda db, cid, code: True  # type: ignore
+
 PASSED = 0
 
 
@@ -41,7 +47,13 @@ def auth(token: str) -> dict:
 
 
 def register(email: str, password: str = "password123"):
-    return client.post("/api/auth/register", json={"email": email, "password": password})
+    # 验证码校验已被 monkeypatch 为恒真,id/code 传占位即可
+    return client.post("/api/auth/register", json={
+        "email": email,
+        "password": password,
+        "captcha_id": "c_test",
+        "captcha_code": "TEST",
+    })
 
 
 print("== 1. 注册 / 登录 / me / 登出 ==")
@@ -62,6 +74,21 @@ r = client.post("/api/auth/logout", headers=auth(alice_token))
 check("登出成功", r.status_code == 200)
 check("登出后 token 失效", client.get("/api/auth/me", headers=auth(alice_token)).status_code == 401)
 
+print("== 1.5 图形验证码(路由层,校验已 monkeypatch) ==")
+r = client.get("/api/auth/captcha")
+check("获取验证码 200", r.status_code == 200)
+data = r.json()
+check("返回 captcha_id 与 SVG data URI", bool(data.get("captcha_id"))
+      and str(data.get("image", "")).startswith("data:image/svg+xml;base64,"))
+check("响应头 no-store", r.headers.get("cache-control", "").lower() == "no-store")
+r = client.post("/api/auth/register", json={"email": "carol-captcha@example.com", "password": "password123"})
+check("缺少验证码字段 422", r.status_code == 422)  # Pydantic 必填,不消耗验证码
+auth_router.verify_captcha = lambda db, cid, code: False  # type: ignore
+r = register("carol-captcha@example.com")
+check("验证码校验失败 400", r.status_code == 400 and "验证码" in r.json()["detail"])
+auth_router.verify_captcha = lambda db, cid, code: True  # type: ignore
+check("恢复恒真后注册可用", register("carol-captcha@example.com").status_code == 200)
+
 print("== 2. 登录与锁定节流 ==")
 for i in range(4):
     r = client.post("/api/auth/login", json={"email": "alice@example.com", "password": "wrong-pass"})
@@ -74,8 +101,6 @@ r = client.post("/api/auth/login", json={"email": "nobody@example.com", "passwor
 check("不存在用户 401", r.status_code == 401)
 
 print("== 3. 密码重置(monkeypatch 发信) ==")
-import app.routers.auth as auth_router  # noqa: E402
-
 sent: list = []
 auth_router.send_reset_email = lambda to, token: sent.append((to, token))  # type: ignore
 
@@ -141,6 +166,43 @@ check("A 开自测", r.status_code == 200)
 check("B 提交 A 的 quiz 404", client.post(f"/api/vocabulary/quiz/{quiz_id}/submit", json={"answers": []}, headers=auth(bob_token)).status_code == 404)
 r = client.post(f"/api/vocabulary/quiz/{quiz_id}/submit", json={"answers": []}, headers=auth(alice_token))
 check("A 提交自己的 quiz 成功", r.status_code == 200)
+
+print("== 5. captcha.py 单元往返(真实实现) ==")
+# 从 captcha 模块导入真函数:与路由层被 patch 的副本(auth_router.verify_captcha)互不干扰
+import base64  # noqa: E402
+from datetime import datetime, timedelta  # noqa: E402
+
+from app.auth import hash_token  # noqa: E402
+from app.captcha import CHARS, create_captcha, generate, verify_captcha  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.database import SessionLocal  # noqa: E402
+from app.models import Captcha, gen_id  # noqa: E402
+
+db = SessionLocal()
+answer, svg = generate()
+check("generate 4 位合法字符", len(answer) == 4 and all(c in CHARS for c in answer))
+check("SVG 含 svg 标记", "<svg" in svg and "</svg>" in svg)
+cap_id, data_uri = create_captcha(db)
+check("create_captcha 返回 data URI", data_uri.startswith("data:image/svg+xml;base64,"))
+check("data URI 可解出 SVG", "<svg" in base64.b64decode(data_uri.split(",", 1)[1]).decode("utf-8"))
+
+aid = gen_id("c")
+db.add(Captcha(id=aid, answer_hash=hash_token("AB2Z"), created_at=datetime.now()))
+db.commit()
+check("正确答案通过", verify_captcha(db, aid, "AB2Z") is True)
+check("一次性:再用即失效", verify_captcha(db, aid, "ab2z") is False)
+bid = gen_id("c")
+db.add(Captcha(id=bid, answer_hash=hash_token("C7KM"), created_at=datetime.now()))
+db.commit()
+check("小写输入通过(大小写不敏感)", verify_captcha(db, bid, "c7km") is True)
+check("错误答案 False 且行已删除", verify_captcha(db, bid, "9999") is False)
+cid2 = gen_id("c")
+db.add(Captcha(id=cid2, answer_hash=hash_token("D4NP"),
+               created_at=datetime.now() - timedelta(minutes=settings.captcha_expire_minutes + 1)))
+db.commit()
+check("过期验证码 False", verify_captcha(db, cid2, "D4NP") is False)
+check("不存在的 id False", verify_captcha(db, "c_none", "D4NP") is False)
+db.close()
 
 print(f"\n全部通过:{PASSED} 项断言")
 # 清理临时库:先 dispose 引擎释放文件句柄(Windows 上不释放则删不掉)

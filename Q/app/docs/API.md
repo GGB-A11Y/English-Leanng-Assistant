@@ -400,9 +400,23 @@
 
 ### 3.7 认证(邮箱 + 密码)
 
+**`GET /api/auth/captcha`** — 获取注册图形验证码(公开)
+
+响应:
+```json
+{ "captcha_id": "c_1a2b3c", "image": "data:image/svg+xml;base64,..." }
+```
+(`image` 为 SVG 验证码的 data URI,直接放入 `<img src>`,任意缩放均清晰)
+
+- 4 位大写字母/数字(去除易混淆的 0/O/1/I),大小写不敏感
+- **一次性**:任何一次校验(无论对错)后立即失效;注册失败时前端必须重新获取
+- 5 分钟有效(`CAPTCHA_EXPIRE_MINUTES` 可配,见 H/.env.example);答案只存 SHA-256 哈希
+- 响应头 `Cache-Control: no-store`;接口未做获取限频(本地单机应用,行极小且验证即删)
+
 **`POST /api/auth/register`** — 注册并自动登录
 
-请求:`{"email": "you@example.com", "password": "password123"}`(邮箱格式校验 + 统一小写;密码 8~128 字符)
+请求:`{"email": "you@example.com", "password": "password123", "captcha_id": "c_1a2b3c", "captcha_code": "AB2Z"}`
+(邮箱格式校验 + 统一小写;密码 8~128 字符;验证码见上方 captcha 接口)
 
 响应:
 ```json
@@ -411,6 +425,8 @@
   "user": { "id": "u_1", "email": "you@example.com", "created_at": "..." }
 }
 ```
+- 校验顺序:邮箱/密码格式 → 验证码 → 邮箱查重;格式错误(422)不消耗验证码
+- 验证码错误/过期/已使用:400 + `{"detail": "验证码错误或已过期,请刷新后重试"}`
 - 已注册:409 + `{"detail": "该邮箱已注册,请直接登录"}`
 - 校验失败:422
 
@@ -457,6 +473,7 @@
 
 **后端存储(数据库/SQLite 等):**
 - 用户/登录会话/密码重置 token(会话与重置 token 只存 SHA-256 哈希)
+- 注册图形验证码(答案只存 SHA-256 哈希;一次性、5 分钟有效,启动时清理过期行)
 - 对话会话与消息
 - 单词词条 + AI 生成详情(释义/例句/词根词缀等)+ 自定义分组(word_groups)
 - 复习状态(SM-2 字段)

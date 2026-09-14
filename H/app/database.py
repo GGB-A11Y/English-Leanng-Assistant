@@ -26,8 +26,25 @@ def init_db():
     _migrate_legacy()
     _migrate_user_isolation()
     _cleanup_stale_auth()
+    _cleanup_stale_captchas()
     from .seed_topics import seed_topics
     seed_topics()
+
+
+def _cleanup_stale_captchas():
+    """启动时清理过期的注册验证码(行极小,全表删除即可)。"""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import delete
+
+    from .models import Captcha
+
+    try:
+        with engine.begin() as conn:
+            cutoff = datetime.now() - timedelta(minutes=settings.captcha_expire_minutes)
+            conn.execute(delete(Captcha).where(Captcha.created_at <= cutoff))
+    except Exception:  # noqa: BLE001 表未建等情况忽略,由 create_all 兜底
+        pass
 
 
 def _cleanup_stale_auth():

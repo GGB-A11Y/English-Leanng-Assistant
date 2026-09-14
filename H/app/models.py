@@ -56,6 +56,16 @@ class PasswordResetToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
+class Captcha(Base):
+    """注册图形验证码:答案只存 SHA-256 哈希,一次性使用,5 分钟有效。"""
+
+    __tablename__ = "captchas"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: gen_id("c"))
+    answer_hash: Mapped[str] = mapped_column(String)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+
+
 # ==================== 业务数据(带 user_id,每用户隔离) ====================
 
 class ChatSession(Base):

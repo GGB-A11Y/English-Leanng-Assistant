@@ -49,6 +49,7 @@ LLM 密钥不写入 `.env` 文件(避免随项目复制/打包泄露),通过**�
 内置作文题库全员共享,其余(单词本/对话/自测/阅读/自定义题目)每用户独立。
 
 - 密码 bcrypt 哈希(sha256 预哈希,兼容 bcrypt 5.0 的 72 字节限制)
+- 注册需 4 位图形验证码(纯 Python SVG 生成,零新依赖;一次性、5 分钟有效,答案只存哈希)
 - 会话 token 与重置 token 只存 SHA-256 哈希;登录失败 5 次锁定 5 分钟;重置邮件每邮箱 60s 限 1 封
 - **升级注意**:启动时自动执行多用户迁移(加 user_id 列/重建分组表/老数据打孤儿标记),
   升级前请备份 `english_learning.db`;老数据不会归属任何账号,如需把老单词本并入某个新账号,可手动执行:
@@ -76,6 +77,7 @@ H/
 │   ├── models.py          # ORM:用户/会话/消息/单词/自测/阅读文章/作文题库
 │   ├── schemas.py         # Pydantic 契约模型(与 API.md 一一对应)
 │   ├── auth.py            # 密码哈希 / 会话与重置 token / get_current_user
+│   ├── captcha.py         # 注册图形验证码(SVG data URI,一次性,答案哈希存储)
 │   ├── email.py           # Resend 邮件发送(密码重置)
 │   ├── sm2.py             # SM-2 间隔重复算法
 │   ├── llm.py             # LangChain 访问层(结构化输出 + 重试)
@@ -105,7 +107,7 @@ H/
 
 ```bash
 cd H
-# 认证 + 多用户隔离全流程(独立临时库 test_smoke.db,不影响开发库;44 项断言)
+# 认证 + 多用户隔离全流程(独立临时库 test_smoke.db,不影响开发库;60 项断言)
 ..\.venv\Scripts\python tests/auth_smoke.py
 
 # 基础连通性(health 为公开接口)
